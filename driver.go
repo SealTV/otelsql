@@ -105,6 +105,23 @@ func Wrap(d driver.Driver, opts ...DriverOption) driver.Driver {
 	return wrapDriver(d, o)
 }
 
+func WrapConnector(c driver.Connector, opts ...DriverOption) driver.Connector {
+	o := driverOptions{
+		meterProvider:  otel.GetMeterProvider(),
+		tracerProvider: otel.GetTracerProvider(),
+	}
+
+	o.trace.spanNameFormatter = formatSpanName
+	o.trace.errorToSpanStatus = spanStatusFromError
+	o.trace.queryTracer = traceNoQuery
+
+	for _, option := range opts {
+		option.applyDriverOptions(&o)
+	}
+
+	return wrapConnector(c, o)
+}
+
 func wrapDriver(d driver.Driver, o driverOptions) driver.Driver {
 	drv := otDriver{
 		parent:     d,
@@ -120,6 +137,17 @@ func wrapDriver(d driver.Driver, o driverOptions) driver.Driver {
 	}
 
 	return struct{ driver.Driver }{drv}
+}
+
+func wrapConnector(c driver.Connector, o driverOptions) driver.Connector {
+	drv := otDriver{
+		parent:     c.Driver(),
+		connector:  c,
+		connConfig: newConnConfig(o),
+		close:      func() error { return nil },
+	}
+
+	return struct{ driver.Connector }{drv}
 }
 
 func newConnConfig(opts driverOptions) connConfig {
@@ -164,7 +192,7 @@ func newConnConfig(opts driverOptions) connConfig {
 	}
 }
 
-var _ driver.Driver = (*otDriver)(nil)
+var _ driver.Connector = (*otDriver)(nil)
 
 type otDriver struct {
 	parent    driver.Driver
@@ -188,6 +216,10 @@ func (d otDriver) Close() error {
 }
 
 func (d otDriver) OpenConnector(name string) (driver.Connector, error) {
+	if d.connector != nil {
+		return d.connector, nil
+	}
+
 	var err error
 
 	d.connector, err = d.parent.(driver.DriverContext).OpenConnector(name)
